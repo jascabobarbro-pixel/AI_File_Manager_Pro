@@ -46,7 +46,8 @@ jobs:
       - name: Setup Rust for Android
         run: |
           cd file_operations
-          chmod +x setup_rust_android.sh
+          chmod +x setup_rust_
+          android.sh
           ./setup_rust_android.sh
       - name: Verify Rust setup
         run: |
@@ -88,27 +89,43 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             file_operations/target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-      - name: Setup Rust for Android
+      - name: Bootstrap web-ui lockfile
+        working-directory: web-ui
         run: |
-          cd file_operations
-          chmod +x setup_rust_android.sh
-          ./setup_rust_android.sh
-      - name: Verify Rust setup
-        run: |
-          cd file_operations
-          echo "🔍 Verifying Rust Android targets..."
-          rustup target list --installed | grep android || echo "No Android targets found"
-          echo "🔍 Verifying cargo configuration..."
-          if [ -f .cargo/config.toml ]; then
-            echo "✅ .cargo/config.toml exists"
+          if [ -f bun.lock ]; then
+            echo "bun.lock present"
           else
-            echo "❌ .cargo/config.toml missing"
-            exit 1
+            echo "bun.lock missing -> generating from pnpm-lock.yaml pins"
+            bun install
           fi
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v5
-      - name: Build with Gradle
-        run: ./gradlew assembledebug --stacktrace
+          
+      - name: Generate default debug signing key
+        run: |
+          mkdir -p ~/.android
+          keytool -genkeypair -v \
+            -keystore ~/.android/debug.keystore \
+            -storepass android -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+        
+      - name: Assemble debug APKs
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Collect debug APKs
+        run: |
+          mkdir -p dist
+          short=$(git rev-parse --short HEAD)
+          for apk in app/build/outputs/apk/debug/*.apk; do
+            base=$(basename "$apk" .apk)
+            cp "$apk" "dist/${base}-${short}.apk"
+          done
+          ls -la dist/
+
+      - name: Upload debug APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: rikkalaw-us-debug-apks
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
